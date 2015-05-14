@@ -17,6 +17,9 @@
 
 #include "irecord.h"
 
+#define IRECORD_LOG_FILE	"/tmp/record-input.txt"
+#define BUF_SIZE		256
+
 static struct pollfd *ufds;
 static char **device_names;
 static int nfds;
@@ -193,6 +196,38 @@ static int print_possible_events(int fd, int print_flags)
 	}
 	free(bits);
 	return 0;
+}
+	struct input_event event;
+
+static void write_event(struct input_event *event)
+{
+	FILE *fp;
+	char logfile[64] = IRECORD_LOG_FILE;
+	char buf[BUF_SIZE];
+
+	struct tm tm = *localtime(&event->time.tv_sec);
+
+	fp = fopen(logfile, "a+b");
+	if (!fp) {
+		fprintf(stderr, "Unable to open input record log file: %s\n", logfile);
+	}
+
+	/* write date and time */
+	sprintf(buf, "[%d%02d%02d-%02d:%02d:%02d.%06ld] ",
+			tm.tm_year + 1900,
+			tm.tm_mon + 1,
+			tm.tm_mday,
+			tm.tm_hour,
+			tm.tm_min,
+			tm.tm_sec,
+			event->time.tv_usec);
+	fputs(buf, fp);
+
+	/* write input event */
+	sprintf(buf, "%04x %04x %08x\n", event->type, event->code, event->value);
+	fputs(buf, fp);
+
+	fclose(fp);
 }
 
 static void print_event(int type, int code, int value, int print_flags)
@@ -513,6 +548,7 @@ int main(int argc, char *argv[])
 	const char *device_path = "/dev/input";
 
 	opterr = 0;
+
 	do {
 		c = getopt(argc, argv, "s:Sv::dpilqc:rh");
 		if (c == EOF)
@@ -643,21 +679,10 @@ int main(int argc, char *argv[])
 						return 1;
 					}
 
-
-					struct tm tm = *localtime(&event.time.tv_sec);
-
-					printf("[%d%02d%02d-%02d:%02d:%02d.%06ld] ",
-							tm.tm_year + 1900,
-							tm.tm_mon + 1,
-							tm.tm_mday,
-							tm.tm_hour,
-							tm.tm_min,
-							tm.tm_sec,
-							event.time.tv_usec);
-
 					if (print_device)
 						printf("%s: ", device_names[i]);
 					print_event(event.type, event.code, event.value, print_flags);
+					write_event(&event);
 					if (sync_rate && event.type == 0 && event.code == 0) {
 						int64_t now = event.time.tv_sec * 1000000LL + event.time.tv_usec;
 						if (last_sync_time)
