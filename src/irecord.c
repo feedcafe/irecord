@@ -6,6 +6,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <errno.h>
+#include <time.h>
 
 #include <sys/ioctl.h>
 #include <sys/inotify.h>
@@ -478,10 +479,8 @@ static int scan_dir(const char *dirname, int print_flags)
 
 static void usage(int argc, char *argv[])
 {
-	fprintf(stderr, "Usage: %s [-t] [-n] [-s switchmask] [-S] [-v [mask]]"
+	fprintf(stderr, "Usage: %s [-s switchmask] [-S] [-v [mask]]"
 			"[-d] [-p] [-i] [-l] [-q] [-c count] [-r] [device]\n", argv[0]);
-	fprintf(stderr, "    -t: show time stamps\n");
-	fprintf(stderr, "    -n: don't print newlines\n");
 	fprintf(stderr, "    -s: print switch states for given bits\n");
 	fprintf(stderr, "    -S: print all switch states\n");
 	fprintf(stderr, "    -v: verbosity mask (errs=1, dev=2, name=4, info=8, vers=16, pos. events=32, props=64)\n");
@@ -500,7 +499,6 @@ int main(int argc, char *argv[])
 	int i;
 	int res;
 	int pollres;
-	int get_time = 0;
 	int print_device = 0;
 	char *newline = "\n";
 	uint16_t get_switch = 0;
@@ -516,17 +514,11 @@ int main(int argc, char *argv[])
 
 	opterr = 0;
 	do {
-		c = getopt(argc, argv, "tns:Sv::dpilqc:rh");
+		c = getopt(argc, argv, "s:Sv::dpilqc:rh");
 		if (c == EOF)
 			break;
 
 		switch (c) {
-		case 't':
-			get_time = 1;
-			break;
-		case 'n':
-			newline = "";
-			break;
 		case 's':
 			get_switch = strtoul(optarg, NULL, 0);
 			if (dont_block == -1)
@@ -650,9 +642,19 @@ int main(int argc, char *argv[])
 						fprintf(stderr, "could not get event\n");
 						return 1;
 					}
-					if (get_time) {
-						printf("[%8ld.%06ld] ", event.time.tv_sec, event.time.tv_usec);
-					}
+
+
+					struct tm tm = *localtime(&event.time.tv_sec);
+
+					printf("[%d%02d%02d-%02d:%02d:%02d.%06ld] ",
+							tm.tm_year + 1900,
+							tm.tm_mon + 1,
+							tm.tm_mday,
+							tm.tm_hour,
+							tm.tm_min,
+							tm.tm_sec,
+							event.time.tv_usec);
+
 					if (print_device)
 						printf("%s: ", device_names[i]);
 					print_event(event.type, event.code, event.value, print_flags);
