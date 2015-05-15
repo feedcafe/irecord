@@ -6,6 +6,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <errno.h>
+#include <ctype.h>
 #include <time.h>
 
 #include <sys/ioctl.h>
@@ -17,12 +18,18 @@
 
 #include "irecord.h"
 
-#define IRECORD_LOG_FILE	"/tmp/record-input.txt"
-#define BUF_SIZE		256
+#define IRECORD_LOG_FILE		"/tmp/record-input.txt"
+#define BUF_SIZE			256
+
+#define DEFAULT_LOG_ROTATE_SIZE_KBYTES	9216	/* 9 MB */
+#define DEFAULT_MAX_ROTATED_LOGS	4
 
 static struct pollfd *ufds;
 static char **device_names;
 static int nfds;
+
+static int log_rotate_size = 0;                   /* 0 means "no log rotation" */
+static int max_rotated_logs = DEFAULT_MAX_ROTATED_LOGS; /* 0 means "unbounded" */
 
 enum {
 	PRINT_DEVICE_ERRORS     = 1U << 0,
@@ -198,20 +205,47 @@ static int print_possible_events(int fd, int print_flags)
 	return 0;
 }
 
-static void write_event(struct input_event *event, char *device_name)
+static void rotate_logs(char *logfile)
+{
+	int err;
+	int i;
+	char file0[64], file1[64];
+
+	for (i = max_rotated_logs; i > 0 ; i--) {
+
+		sprintf(file1, "%s.%d", logfile, i);
+
+		if (i - 1 == 0) {
+			sprintf(file0, "%s", logfile);
+		} else {
+			sprintf(file0, "%s.%d", logfile, i - 1);
+		}
+
+		err = rename(file0, file1);
+
+		if (err < 0 && errno != ENOENT) {
+			perror("while rotating log files");
+		}
+
+	}
+}
+
+static void write_event(struct input_event *event, char *device_name, char *logfile)
 {
 	FILE *fp;
-	char logfile[64] = IRECORD_LOG_FILE;
 	char buf[BUF_SIZE];
+	int bytes_written;
+	static int bytes_total = 0;
 
 	struct tm tm = *localtime(&event->time.tv_sec);
 
 	fp = fopen(logfile, "a+b");
 	if (!fp) {
 		fprintf(stderr, "Unable to open input record log file: %s\n", logfile);
+		return;
 	}
 
-	/* write date and time */
+	/* date and time */
 	sprintf(buf, "[%d%02d%02d-%02d:%02d:%02d.%06ld] ",
 			tm.tm_year + 1900,
 			tm.tm_mon + 1,
@@ -220,17 +254,37 @@ static void write_event(struct input_event *event, char *device_name)
 			tm.tm_min,
 			tm.tm_sec,
 			event->time.tv_usec);
-	fputs(buf, fp);
+	bytes_written = fputs(buf, fp);
+	if (bytes_written < 0) {
+		fprintf(stderr, "write date and time failed: %d\n", bytes_written);
+		return;
+	}
+	bytes_total += strlen(buf);
 
-	/* write device name */
+	/* device name */
 	sprintf(buf, "%s: ", device_name);
-	fputs(buf, fp);
+	bytes_written = fputs(buf, fp);
+	if (bytes_written < 0) {
+		fprintf(stderr, "write device name failed: %d\n", bytes_written);
+		return;
+	}
+	bytes_total += strlen(buf);
 
-	/* write input event */
+	/* input event */
 	sprintf(buf, "%04x %04x %08x\n", event->type, event->code, event->value);
-	fputs(buf, fp);
+	bytes_written = fputs(buf, fp);
+	if (bytes_written < 0) {
+		fprintf(stderr, "write input event failed: %d\n", bytes_written);
+		return;
+	}
+	bytes_total += strlen(buf);
 
 	fclose(fp);
+
+	if (log_rotate_size > 0 && (bytes_total / 1024) >= log_rotate_size) {
+		rotate_logs(logfile);
+		bytes_total = 0;
+	}
 }
 
 #ifdef PRINT_EVENT
@@ -521,6 +575,8 @@ static void usage(int argc, char *argv[])
 {
 	fprintf(stderr, "Usage: %s [-s switchmask] [-S] [-v [mask]]"
 			"[-d] [-p] [-i] [-l] [-q] [-c count] [-r] [device]\n", argv[0]);
+	fprintf(stderr, "    -b: rotate log every kbytes. (9 MB if unspecified).\n");
+	fprintf(stderr, "    -f: log to file, default to /tmp/record-input.txt\n");
 	fprintf(stderr, "    -s: print switch states for given bits\n");
 	fprintf(stderr, "    -S: print all switch states\n");
 	fprintf(stderr, "    -v: verbosity mask (errs=1, dev=2, name=4, info=8, vers=16, pos. events=32, props=64)\n");
@@ -551,15 +607,33 @@ int main(int argc, char *argv[])
 	int64_t last_sync_time = 0;
 	const char *device = NULL;
 	const char *device_path = "/dev/input";
+	char logfile[64] = IRECORD_LOG_FILE;
 
 	opterr = 0;
 
 	do {
-		c = getopt(argc, argv, "s:Sv::dpilqc:rh");
+		c = getopt(argc, argv, "b:f:s:Sv::dpilqc:rh");
 		if (c == EOF)
 			break;
 
 		switch (c) {
+		case 'b':
+			if (optarg == NULL) {
+				log_rotate_size = DEFAULT_LOG_ROTATE_SIZE_KBYTES;
+			} else {
+				if (!isdigit(optarg[0])) {
+					fprintf(stderr, "Invalid parameter to -r\n");
+					usage(argc, argv);
+					exit(1);
+				}
+
+			}
+			log_rotate_size = atoi(optarg);
+			break;
+		case 'f':
+			memset(logfile, '\0', sizeof(logfile));
+			strncpy(logfile, optarg, strlen(optarg));
+			break;
 		case 's':
 			get_switch = strtoul(optarg, NULL, 0);
 			if (dont_block == -1)
@@ -574,7 +648,8 @@ int main(int argc, char *argv[])
 			if (optarg)
 				print_flags |= strtoul(optarg, NULL, 0);
 			else
-				print_flags |= PRINT_DEVICE | PRINT_DEVICE_NAME | PRINT_DEVICE_INFO | PRINT_VERSION;
+				print_flags |= PRINT_DEVICE | PRINT_DEVICE_NAME
+					| PRINT_DEVICE_INFO | PRINT_VERSION;
 			print_flags_set = 1;
 			break;
 		case 'd':
@@ -689,7 +764,7 @@ int main(int argc, char *argv[])
 						printf("%s: ", device_names[i]);
 					print_event(event.type, event.code, event.value, print_flags);
 #endif
-					write_event(&event, device_names[i]);
+					write_event(&event, device_names[i], logfile);
 					if (sync_rate && event.type == 0 && event.code == 0) {
 						int64_t now = event.time.tv_sec * 1000000LL + event.time.tv_usec;
 						if (last_sync_time)
