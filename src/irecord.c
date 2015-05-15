@@ -30,6 +30,7 @@ static int nfds;
 
 static int log_rotate_size = 0;                   /* 0 means "no log rotation" */
 static int max_rotated_logs = DEFAULT_MAX_ROTATED_LOGS; /* 0 means "unbounded" */
+static char logfile[64] = IRECORD_LOG_FILE;
 
 enum {
 	PRINT_DEVICE_ERRORS     = 1U << 0,
@@ -402,22 +403,33 @@ static int open_device(const char *device, int print_flags)
 	char location[80];
 	char idstr[80];
 	struct input_id id;
+	FILE *fp;
+	char buf[BUF_SIZE];
+
+	fp = fopen(logfile, "a+b");
+	if (!fp) {
+		fprintf(stderr, "Unable to open input record log file: %s\n", logfile);
+		return -errno;
+	}
 
 	fd = open(device, O_RDWR);
 	if (fd < 0) {
-		if (print_flags & PRINT_DEVICE_ERRORS)
-			fprintf(stderr, "could not open %s, %s\n", device, strerror(errno));
+		sprintf(buf, "could not open %s, %s\n", device, strerror(errno));
+		fputs(buf, fp);
+		fclose(fp);
 		return -1;
 	}
 
 	if (ioctl(fd, EVIOCGVERSION, &version)) {
-		if (print_flags & PRINT_DEVICE_ERRORS)
-			fprintf(stderr, "could not get driver version for %s, %s\n", device, strerror(errno));
+		sprintf(buf, "could not get driver version for %s, %s\n", device, strerror(errno));
+		fputs(buf, fp);
+		fclose(fp);
 		return -1;
 	}
 	if (ioctl(fd, EVIOCGID, &id)) {
-		if (print_flags & PRINT_DEVICE_ERRORS)
-			fprintf(stderr, "could not get driver id for %s, %s\n", device, strerror(errno));
+		sprintf(buf, "could not get driver id for %s, %s\n", device, strerror(errno));
+		fputs(buf, fp);
+		fclose(fp);
 		return -1;
 	}
 	name[sizeof(name) - 1] = '\0';
@@ -449,16 +461,16 @@ static int open_device(const char *device, int print_flags)
 	}
 	device_names = new_device_names;
 
-	if (print_flags & PRINT_DEVICE)
-		printf("add device %d: %s\n", nfds, device);
-	if (print_flags & PRINT_DEVICE_INFO)
-		printf("  bus:      %04x\n"
-				"  vendor    %04x\n"
-				"  product   %04x\n"
-				"  version   %04x\n",
+	sprintf(buf, "add device %d:\t%s,\tname: %s\n", nfds, device, name);
+	fputs(buf, fp);
+
+	sprintf(buf, "\t\tbus: %04x\t"
+				"VID:PID  %04x:%04x\t"
+				"version  %04x\n\n",
 				id.bustype, id.vendor, id.product, id.version);
-	if (print_flags & PRINT_DEVICE_NAME)
-		printf("  name:     \"%s\"\n", name);
+	fputs(buf, fp);
+	fclose(fp);
+
 	if (print_flags & PRINT_DEVICE_INFO)
 		printf("  location: \"%s\"\n"
 				"  id:       \"%s\"\n", location, idstr);
@@ -491,8 +503,19 @@ int close_device(const char *device, int print_flags)
 	for (i = 1; i < nfds; i++) {
 		if (strcmp(device_names[i], device) == 0) {
 			int count = nfds - i - 1;
-			if (print_flags & PRINT_DEVICE)
-				printf("remove device %d: %s\n", i, device);
+			FILE *fp;
+			char buf[BUF_SIZE];
+
+			fp = fopen(logfile, "a+b");
+			if (!fp) {
+				fprintf(stderr, "Unable to open input record log file: %s\n", logfile);
+				return -errno;
+			}
+
+			sprintf(buf, "remove device: %s\n", device);
+			fputs(buf, fp);
+			fclose(fp);
+
 			free(device_names[i]);
 			memmove(device_names + i, device_names + i + 1, sizeof(device_names[0]) * count);
 			memmove(ufds + i, ufds + i + 1, sizeof(ufds[0]) * count);
@@ -607,7 +630,6 @@ int main(int argc, char *argv[])
 	int64_t last_sync_time = 0;
 	const char *device = NULL;
 	const char *device_path = "/dev/input";
-	char logfile[64] = IRECORD_LOG_FILE;
 
 	opterr = 0;
 
