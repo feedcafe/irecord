@@ -16,6 +16,7 @@ static struct label input_prop_labels[] = {
 	LABEL_END,
 };
 
+#ifdef PRINT_EVENT
 static struct label ev_labels[] = {
 	LABEL(EV_SYN),
 	LABEL(EV_KEY),
@@ -39,6 +40,7 @@ static struct label syn_labels[] = {
 	LABEL(SYN_DROPPED),
 	LABEL_END,
 };
+#endif
 
 static struct label key_labels[] = {
 	LABEL(KEY_RESERVED),
@@ -652,12 +654,14 @@ static struct label snd_labels[] = {
 	LABEL_END,
 };
 
+#ifdef PRINT_EVENT
 static struct label mt_tool_labels[] = {
 	LABEL(MT_TOOL_FINGER),
 	LABEL(MT_TOOL_PEN),
 	LABEL(MT_TOOL_MAX),
 	LABEL_END,
 };
+#endif
 
 static struct label ff_status_labels[] = {
 	LABEL(FF_STATUS_STOPPED),
@@ -686,9 +690,11 @@ static struct label ff_labels[] = {
 	LABEL_END,
 };
 
+#ifdef PRINT_EVENT
 static struct label key_value_labels[] = {
 	{ "UP", 0 },
 	{ "DOWN", 1 },
 	{ "REPEAT", 2 },
 	LABEL_END,
 };
+#endif

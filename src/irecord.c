@@ -197,9 +197,8 @@ static int print_possible_events(int fd, int print_flags)
 	free(bits);
 	return 0;
 }
-	struct input_event event;
 
-static void write_event(struct input_event *event)
+static void write_event(struct input_event *event, char *device_name)
 {
 	FILE *fp;
 	char logfile[64] = IRECORD_LOG_FILE;
@@ -223,6 +222,10 @@ static void write_event(struct input_event *event)
 			event->time.tv_usec);
 	fputs(buf, fp);
 
+	/* write device name */
+	sprintf(buf, "%s: ", device_name);
+	fputs(buf, fp);
+
 	/* write input event */
 	sprintf(buf, "%04x %04x %08x\n", event->type, event->code, event->value);
 	fputs(buf, fp);
@@ -230,6 +233,7 @@ static void write_event(struct input_event *event)
 	fclose(fp);
 }
 
+#ifdef PRINT_EVENT
 static void print_event(int type, int code, int value, int print_flags)
 {
 	const char *type_label, *code_label, *value_label;
@@ -298,6 +302,7 @@ static void print_event(int type, int code, int value, int print_flags)
 		printf("%04x %04x %08x", type, code, value);
 	}
 }
+#endif
 
 static void print_hid_descriptor(int bus, int vendor, int product)
 {
@@ -679,17 +684,21 @@ int main(int argc, char *argv[])
 						return 1;
 					}
 
+#ifdef PRINT_EVENT
 					if (print_device)
 						printf("%s: ", device_names[i]);
 					print_event(event.type, event.code, event.value, print_flags);
-					write_event(&event);
+#endif
+					write_event(&event, device_names[i]);
 					if (sync_rate && event.type == 0 && event.code == 0) {
 						int64_t now = event.time.tv_sec * 1000000LL + event.time.tv_usec;
 						if (last_sync_time)
 							printf(" rate %lld", 1000000LL / (now - last_sync_time));
 						last_sync_time = now;
 					}
+#ifdef PRINT_EVENT
 					printf("%s", newline);
+#endif
 					if (event_count && --event_count == 0)
 						return 0;
 				}
