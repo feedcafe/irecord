@@ -19,6 +19,7 @@
 #include "irecord.h"
 
 #define IRECORD_LOG_FILE		"/tmp/record-input.txt"
+#define IRECORD_EVT_FILE		"/tmp/record-input.log"
 #define BUF_SIZE			256
 
 #define DEFAULT_LOG_ROTATE_SIZE_KBYTES	9216	/* 9 MB */
@@ -231,21 +232,30 @@ static void rotate_logs(char *logfile)
 	}
 }
 
-static void write_event(struct input_event *event, char *device_name, char *logfile)
+static int write_event(struct input_event *event, char *device_name,
+			char *logfile, int log_fd)
 {
+	struct tm tm;
 	FILE *fp;
 	char buf[BUF_SIZE];
 	int bytes_written;
 	static int bytes_total = 0;
 
-	struct tm tm = *localtime(&event->time.tv_sec);
+	/* write input event, can be analyzed by program */
+	bytes_written = write(log_fd, event, sizeof(struct input_event));
+	if (bytes_written < 0) {
+		fprintf(stderr, "write to input event file failed\n");
+		return -errno;
+	}
 
+	/* human readable format */
 	fp = fopen(logfile, "a+b");
 	if (!fp) {
 		fprintf(stderr, "Unable to open input record log file: %s\n", logfile);
-		return;
+		return -errno;
 	}
 
+	tm = *localtime(&event->time.tv_sec);
 	/* date and time */
 	sprintf(buf, "[%d%02d%02d-%02d:%02d:%02d.%06ld] ",
 			tm.tm_year + 1900,
@@ -258,7 +268,7 @@ static void write_event(struct input_event *event, char *device_name, char *logf
 	bytes_written = fputs(buf, fp);
 	if (bytes_written < 0) {
 		fprintf(stderr, "write date and time failed: %d\n", bytes_written);
-		return;
+		return -errno;
 	}
 	bytes_total += strlen(buf);
 
@@ -267,7 +277,7 @@ static void write_event(struct input_event *event, char *device_name, char *logf
 	bytes_written = fputs(buf, fp);
 	if (bytes_written < 0) {
 		fprintf(stderr, "write device name failed: %d\n", bytes_written);
-		return;
+		return -errno;
 	}
 	bytes_total += strlen(buf);
 
@@ -276,7 +286,7 @@ static void write_event(struct input_event *event, char *device_name, char *logf
 	bytes_written = fputs(buf, fp);
 	if (bytes_written < 0) {
 		fprintf(stderr, "write input event failed: %d\n", bytes_written);
-		return;
+		return -errno;
 	}
 	bytes_total += strlen(buf);
 
@@ -286,6 +296,8 @@ static void write_event(struct input_event *event, char *device_name, char *logf
 		rotate_logs(logfile);
 		bytes_total = 0;
 	}
+
+	return 0;
 }
 
 #ifdef PRINT_EVENT
@@ -617,8 +629,6 @@ int main(int argc, char *argv[])
 	int c;
 	int i;
 	int res;
-	int pollres;
-	int print_device = 0;
 	char *newline = "\n";
 	uint16_t get_switch = 0;
 	struct input_event event;
@@ -626,6 +636,7 @@ int main(int argc, char *argv[])
 	int print_flags_set = 0;
 	int dont_block = -1;
 	int event_count = 0;
+	int log_fd;
 	int sync_rate = 0;
 	int64_t last_sync_time = 0;
 	const char *device = NULL;
@@ -737,7 +748,6 @@ int main(int argc, char *argv[])
 	} else {
 		if (!print_flags_set)
 			print_flags |= PRINT_DEVICE_ERRORS | PRINT_DEVICE | PRINT_DEVICE_NAME;
-		print_device = 1;
 		res = inotify_add_watch(ufds[0].fd, device_path, IN_DELETE | IN_CREATE);
 		if (res < 0) {
 			fprintf(stderr, "could not add watch for %s, %s\n", device_path, strerror(errno));
@@ -766,9 +776,16 @@ int main(int argc, char *argv[])
 	if (dont_block)
 		return 0;
 
+	log_fd = open(IRECORD_EVT_FILE, O_WRONLY|O_CREAT|O_TRUNC,
+                              S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH);
+	if (log_fd == -1) {
+		fprintf(stderr, "Unable to open input event log file: %s\n",
+				IRECORD_EVT_FILE);
+		return -errno;
+	}
+
 	while (1) {
-		pollres = poll(ufds, nfds, -1);
-		//printf("poll %d, returned %d\n", nfds, pollres);
+		poll(ufds, nfds, -1);
 		if (ufds[0].revents & POLLIN) {
 			read_notify(device_path, ufds[0].fd, print_flags);
 		}
@@ -778,15 +795,16 @@ int main(int argc, char *argv[])
 					res = read(ufds[i].fd, &event, sizeof(event));
 					if (res < (int)sizeof(event)) {
 						fprintf(stderr, "could not get event\n");
+						close(log_fd);
 						return 1;
 					}
 
-#ifdef PRINT_EVENT
-					if (print_device)
-						printf("%s: ", device_names[i]);
-					print_event(event.type, event.code, event.value, print_flags);
-#endif
-					write_event(&event, device_names[i], logfile);
+					res = write_event(&event, device_names[i], logfile, log_fd);
+					if (res < 0) {
+						fprintf(stderr, "write event failed\n");
+						close(log_fd);
+						return 1;
+					}
 					if (sync_rate && event.type == 0 && event.code == 0) {
 						int64_t now = event.time.tv_sec * 1000000LL + event.time.tv_usec;
 						if (last_sync_time)
@@ -796,12 +814,15 @@ int main(int argc, char *argv[])
 #ifdef PRINT_EVENT
 					printf("%s", newline);
 #endif
-					if (event_count && --event_count == 0)
+					if (event_count && --event_count == 0) {
+						close(log_fd);
 						return 0;
+					}
 				}
 			}
 		}
 	}
+	close(log_fd);
 
 	return 0;
 }
