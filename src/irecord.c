@@ -610,7 +610,7 @@ static void usage(int argc, char *argv[])
 {
 	fprintf(stderr, "Usage: %s [-s switchmask] [-S] [-v [mask]]"
 			"[-d] [-p] [-i] [-l] [-q] [-c count] [-r] [device]\n", argv[0]);
-	fprintf(stderr, "    -b: rotate log every kbytes. (9 MB if unspecified).\n");
+	fprintf(stderr, "    -r: rotate log every kbytes. (9 MB if unspecified).\n");
 	fprintf(stderr, "    -f: log to file, default to /tmp/record-input.txt\n");
 	fprintf(stderr, "    -s: print switch states for given bits\n");
 	fprintf(stderr, "    -S: print all switch states\n");
@@ -621,7 +621,7 @@ static void usage(int argc, char *argv[])
 	fprintf(stderr, "    -l: label event types and names in plain text\n");
 	fprintf(stderr, "    -q: quiet (clear verbosity mask)\n");
 	fprintf(stderr, "    -c: print given number of events then exit\n");
-	fprintf(stderr, "    -r: print rate events are received\n");
+	fprintf(stderr, "    -d: remove log file\n");
 }
 
 int main(int argc, char *argv[])
@@ -645,12 +645,12 @@ int main(int argc, char *argv[])
 	opterr = 0;
 
 	do {
-		c = getopt(argc, argv, "b:f:s:Sv::dpilqc:rh");
+		c = getopt(argc, argv, "f:s:Sv::dpilqc:r:hd");
 		if (c == EOF)
 			break;
 
 		switch (c) {
-		case 'b':
+		case 'r':
 			if (optarg == NULL) {
 				log_rotate_size = DEFAULT_LOG_ROTATE_SIZE_KBYTES;
 			} else {
@@ -685,9 +685,6 @@ int main(int argc, char *argv[])
 					| PRINT_DEVICE_INFO | PRINT_VERSION;
 			print_flags_set = 1;
 			break;
-		case 'd':
-			print_flags |= PRINT_HID_DESCRIPTOR;
-			break;
 		case 'p':
 			print_flags |= PRINT_DEVICE_ERRORS | PRINT_DEVICE
 				| PRINT_DEVICE_NAME | PRINT_POSSIBLE_EVENTS | PRINT_INPUT_PROPS;
@@ -711,15 +708,16 @@ int main(int argc, char *argv[])
 			event_count = atoi(optarg);
 			dont_block = 0;
 			break;
-		case 'r':
-			sync_rate = 1;
-			break;
 		case '?':
 			fprintf(stderr, "%s: invalid option -%c\n",
 					argv[0], optopt);
 		case 'h':
 			usage(argc, argv);
 			exit(1);
+		case 'd':
+			remove(IRECORD_EVT_FILE);
+			remove(IRECORD_LOG_FILE);
+			exit(0);
 		}
 	} while (1);
 
